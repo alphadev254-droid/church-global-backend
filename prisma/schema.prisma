@@ -1,0 +1,844 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Permissions (global — seeded once) ────────────────────────────────────────
+
+model Permission {
+  id       String   @id @default(cuid())
+  name     String   @unique   // e.g. 'members:create'
+  resource String             // 'members'
+  action   String             // 'create'
+
+  roles    RolePermission[]
+
+  @@map("permissions")
+}
+
+// ─── Roles (global — shared across all tenants) ────────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique    // 'national_admin' | 'regional_leader' etc.
+  displayName String              // 'National Administrator'
+  createdAt   DateTime @default(now())
+
+  permissions RolePermission[]
+  users       User[]
+
+  @@map("roles")
+}
+
+// ─── Role ↔ Permission junction ────────────────────────────────────────────────
+
+model RolePermission {
+  ministryAdminId String   @default("GLOBAL")
+  roleId          String
+  permissionId    String
+
+  role          Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission    Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([ministryAdminId, roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ─── Users & Auth ─────────────────────────────────────────────────────────────
+
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("password_reset_tokens")
+}
+
+model User {
+  id                     String   @id @default(cuid())
+  email                  String   @unique
+  password               String
+  firstName              String
+  lastName               String
+  roleId                 String?
+  phone                  String?
+  avatar                 String?
+  churchId               String?
+  ministryAdminId        String?
+  accountCountry         String?  @map("account_country")
+  regions                String?  @db.Text
+  districts              String?  @db.Text
+  traditionalAuthorities String?  @db.Text
+  gender                 String?
+  dateOfBirth            DateTime?
+  maritalStatus          String?  // Single, Married, Widowed, Divorced
+  weddingDate            DateTime?  // Only if married
+  anniversary            DateTime?
+  residentialNeighbourhood String?
+  serviceInterest        String?  // Choir, Ushering, Greeters, Security/Protocol, Missions/Outreaches, Other
+  membershipType         String?  // Visitor, Member
+  baptizedByImmersion    Boolean?
+  status                 String   @default("active")
+  memberId               String?  @unique
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  role                   Role?    @relation(fields: [roleId], references: [id])
+  church                 Church?  @relation(fields: [churchId], references: [id])
+  ownedChurches          Church[] @relation("MinistryAdminChurches")
+  createdSubaccounts     Subaccount[] @relation("SubaccountCreator")
+  tickets                EventTicket[]
+  transactions           Transaction[]
+  donationTransactions   DonationTransaction[]
+  passwordResetTokens    PasswordResetToken[]
+  teams                  UserTeam[]
+  reminders              ReminderCache[]
+
+  @@index([churchId, roleId, status, createdAt])
+  @@index([dateOfBirth])
+  @@index([weddingDate])
+  @@index([anniversary])
+  @@map("users")
+}
+
+// ─── Church Hierarchy ──────────────────────────────────────────────────────────
+
+model Location {
+  id                   Int      @id @default(autoincrement())
+  country              String   @default("Malawi")
+  region               String
+  district             String
+  traditionalAuthority String   @map("traditional_authority")
+  village              String
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("locations")
+}
+
+model Church {
+  id                   String   @id @default(cuid())
+  name                 String
+  location             String
+  country              String   @default("Malawi")
+  region               String?
+  district             String?
+  traditionalAuthority String?
+  village              String?
+  address              String?
+  phone                String?
+  email                String?
+  website              String?
+  pastorName           String?
+  logoUrl              String?
+  memberCount          Int      @default(0)
+  yearFounded          Int?
+  branchCode           String?  @unique
+  ministryAdminId      String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  inviteToken   String?  @unique
+
+  ministryAdmin User?          @relation("MinistryAdminChurches", fields: [ministryAdminId], references: [id])
+  users         User[]
+  events        Event[]
+  givingCampaigns GivingCampaign[]
+  donationTransactions DonationTransaction[]
+  attendance    Attendance[]
+  meetings      Meeting[]
+  announcements Announcement[]
+  resources     Resource[]
+  transactions  Transaction[]
+  subaccount    Subaccount?
+  wallet        Wallet?
+  kpis          KPI[]
+  teams         Team[]
+  reminders     ReminderCache[]
+
+  @@map("churches")
+}
+
+// ─── Subaccounts ───────────────────────────────────────────────────────────────
+
+model Subaccount {
+  id               String   @id @default(cuid())
+  churchId         String   @unique
+  ministryAdminId  String
+  subaccountCode   String   @unique
+  businessName     String
+  settlementBank   String
+  accountNumber    String
+  percentageCharge Float    @default(0)
+  description      String?  @db.Text
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  church           Church   @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  ministryAdmin    User     @relation("SubaccountCreator", fields: [ministryAdminId], references: [id])
+
+  @@map("subaccounts")
+}
+
+// ─── Events ────────────────────────────────────────────────────────────────────
+
+model Event {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @db.Text
+  date          DateTime
+  endDate       DateTime
+  time          String
+  location      String
+  contactEmail  String?
+  contactPhone  String?
+  type          String   @default("service")
+  status        String   @default("upcoming")
+  attendeeCount Int      @default(0)
+  // Ticketing fields
+  requiresTicket Boolean  @default(false)
+  isFree        Boolean  @default(true)
+  ticketPrice   Float?
+  currency      String?  // 'MWK' | 'KSH'
+  totalTickets  Int?
+  ticketsSold   Int      @default(0)
+  ticketSalesCutoff DateTime?
+  allowPublicTicketing Boolean @default(false)
+  imageUrl      String?
+  churchId      String
+  createdById   String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  church        Church       @relation(fields: [churchId], references: [id])
+  tickets       EventTicket[]
+  reminders     ReminderCache[]
+
+  @@index([churchId, date])
+  @@map("events")
+}
+
+// ─── Event Tickets ────────────────────────────────────────────────────────────
+
+model EventTicket {
+  id            String   @id @default(cuid())
+  ticketNumber  String   @unique
+  eventId       String
+  userId        String?  // null for guest tickets
+  transactionId String?
+  status        String   @default("confirmed") // reserved | confirmed | cancelled | used
+  isManual      Boolean  @default(false) // true if created manually by admin
+  isGuest       Boolean  @default(false)
+  guestName     String?
+  guestEmail    String?
+  guestPhone    String?
+  attended      Boolean  @default(false)
+  attendedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  event         Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user          User?        @relation(fields: [userId], references: [id])
+  transaction   Transaction? @relation(fields: [transactionId], references: [id])
+
+  @@index([isGuest])
+  @@map("event_tickets")
+}
+
+// ─── Transactions ─────────────────────────────────────────────────────────────
+
+model Transaction {
+  id            String   @id @default(cuid())
+  amount        Float
+  currency      String   @default("MWK")
+  status        String   @default("pending") // pending | completed | failed | refunded
+  paymentMethod String   @default("cash") // cash | mobile_money | card | bank_transfer
+  reference     String?  @unique
+  userId        String?  // null for guest transactions
+  churchId      String?
+  eventId       String?  // For quick event filtering
+  type          String   @default("event_ticket") // event_ticket | donation | subscription
+  notes         String?  @db.Text
+  isManual      Boolean  @default(false) // true if created manually by admin
+  // Paystack details
+  channel       String?  // mobile_money | card | bank
+  ipAddress     String?
+  paidAt        DateTime?
+  gatewayResponse String?  @db.LongText
+  // Fee breakdown
+  baseAmount      Float?   // Original amount (what church gets)
+  convenienceFee  Float?   // Gateway processing fee (2% Paychangu, 2.9% Paystack)
+  systemFeeAmount Float?   // Platform system fee (17.5% Malawi, 16% Kenya of baseAmount)
+  totalAmount     Float?   // baseAmount + convenienceFee + systemFeeAmount
+  gatewayCharge   Float?   // Actual charge reported by gateway (Paychangu: charge field, Paystack: fees field)
+  systemGatewayFeeRate Float?   // Gateway fee rate used e.g. 0.02 for Malawi, 0.029 for Kenya
+  systemFeeRate   Float?   // Platform fee rate used e.g. 0.005 for both
+  // Gateway routing
+  gateway         String?  // paystack | paychangu
+  gatewayCountry  String?  // Kenya | Malawi
+  // Subaccount info
+  subaccountCode String?
+  subaccountName String?
+  // Customer info (from payment gateway)
+  customerEmail String?
+  customerPhone String?
+  authorizationCode String?
+  cardLast4     String?
+  cardBank      String?
+  // Guest info (typed by user on frontend)
+  isGuest       Boolean  @default(false)
+  guestName     String?
+  guestEmail    String?
+  guestPhone    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User?         @relation(fields: [userId], references: [id])
+  church        Church?       @relation(fields: [churchId], references: [id])
+  tickets       EventTicket[]
+
+  @@index([userId])
+  @@index([churchId])
+  @@index([type])
+  @@index([eventId])
+  @@index([status])
+  @@index([paidAt])
+  @@index([customerEmail])
+  @@map("transactions")
+}
+
+// ─── Pending Transactions (temporary until payment confirmed) ────────────────
+
+model PendingTransaction {
+  id        String   @id @default(cuid())
+  reference String?  @unique
+  amount    Float
+  currency  String   @default("NGN")
+  status    String   @default("pending") // pending | completed | failed | abandoned
+  userId    String?
+  churchId  String
+  eventId   String?
+  type      String   @default("event_ticket")
+  metadata  String?  @db.Text
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+  @@index([churchId])
+  @@index([eventId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([reference])
+  @@map("pending_transactions")
+}
+
+// ─── Giving & Donations ────────────────────────────────────────────────────────
+
+model GivingCampaign {
+  id            String   @id @default(cuid())
+  churchId      String
+  name          String
+  description   String?  @db.Text
+  category      String   // tithe | offering | partnership | welfare | missions
+  subcategory   String?  // tv_sponsorship | radio_sponsorship | funeral | wedding | etc
+  targetAmount  Float?
+  currency      String   @default("MWK")
+  status        String   @default("active") // active | completed | cancelled
+  startDate     DateTime @default(now())
+  endDate       DateTime?
+  imageUrl      String?
+  allowPublicDonations Boolean @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  church        Church   @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  donations     DonationTransaction[]
+
+  @@index([churchId])
+  @@index([category])
+  @@index([status])
+  @@map("giving_campaigns")
+}
+
+model DonationTransaction {
+  id            String   @id @default(cuid())
+  campaignId    String
+  userId        String?
+  churchId      String
+  amount        Float
+  currency      String   @default("MWK")
+  transactionId String?  @unique
+  paymentMethod String?  // mpesa | card | bank_transfer | cash
+  reference     String?  @unique
+  status        String   @default("pending") // pending | completed | failed
+  isAnonymous   Boolean  @default(false)
+  isGuest       Boolean  @default(false)
+  guestName     String?
+  guestEmail    String?
+  guestPhone    String?
+  donorName     String?
+  donorEmail    String?
+  donorPhone    String?
+  notes         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  campaign      GivingCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user          User?    @relation(fields: [userId], references: [id])
+  church        Church   @relation(fields: [churchId], references: [id])
+
+  @@index([campaignId])
+  @@index([userId])
+  @@index([churchId])
+  @@index([status])
+  @@index([churchId, status, createdAt])
+  @@map("donation_transactions")
+}
+
+// ─── Attendance ────────────────────────────────────────────────────────────────
+
+model Attendance {
+  id             String   @id @default(cuid())
+  eventId        String?
+  churchId       String
+  date           DateTime
+  totalAttendees Int
+  maleCount      Int      @default(0)
+  femaleCount    Int      @default(0)
+  children       Int      @default(0)  // 0-12 years
+  youth          Int      @default(0)  // 13-17 years
+  youngAdults    Int      @default(0)  // 18-35 years
+  adults         Int      @default(0)  // 36-59 years
+  seniors        Int      @default(0)  // 60+ years
+  newVisitors    Int      @default(0)
+  serviceType    String   @default("Sunday Service")
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  church         Church   @relation(fields: [churchId], references: [id])
+
+  @@index([churchId, date])
+  @@map("attendance")
+}
+
+// ─── Meetings ──────────────────────────────────────────────────────────────────
+
+model Meeting {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  date        DateTime
+  time        String
+  location    String?
+  // status: scheduled | in_progress | completed | cancelled
+  status      String   @default("scheduled")
+  agenda      String?  @db.Text  // JSON string
+  minutes     String?  @db.Text
+  churchId    String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  church      Church   @relation(fields: [churchId], references: [id])
+
+  @@map("meetings")
+}
+
+// ─── Announcements / Communication ────────────────────────────────────────────
+
+model Announcement {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text
+  // type: announcement | prayer_request | newsletter
+  type        String   @default("announcement")
+  // priority: normal | urgent
+  priority    String   @default("normal")
+  attachments String?  @db.Text  // JSON array of { url, name, size, mimeType }
+  churchId    String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  church      Church   @relation(fields: [churchId], references: [id])
+
+  @@map("announcements")
+}
+
+// ─── Resources ────────────────────────────────────────────────────────────────
+
+model Resource {
+  id          String   @id @default(cuid())
+  title       String
+  description String?  @db.Text
+  // category: bible | devotional | study_plan | sermon | worship | general
+  category    String   @default("general")
+  // type: article | video | audio | document | link
+  type        String   @default("document")
+  fileUrl     String?  // primary uploaded file path or external URL
+  fileName    String?  // original file name
+  fileSize    Int?     // bytes
+  mimeType    String?  // e.g. application/pdf
+  filesJson   String?  @db.Text  // JSON array of { url, name, size, mimeType } for multiple uploads
+  duration    String?  // e.g. "45 min"
+  author      String?
+  tags        String?  @db.Text  // JSON array
+  churchId    String
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  church      Church   @relation(fields: [churchId], references: [id])
+
+  @@map("resources")
+}
+
+// ─── Packages & Payments ───────────────────────────────────────────────────────
+
+model Subscription {
+  id              String   @id @default(cuid())
+  ministryAdminId String   @unique
+  packageId       String
+  status          String   @default("active") // active | expired | cancelled
+  startsAt        DateTime
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  // Email tracking for expiration reminders
+  lastEmailDay    Int?     // Last day email was sent: -6, -4, -2 for expiring; 1-6 for expired
+
+  package         Package  @relation(fields: [packageId], references: [id])
+
+  @@index([ministryAdminId])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("subscriptions")
+}
+
+model Package {
+  id           String   @id @default(cuid())
+  name         String   @unique  // 'basic' | 'standard' | 'premium'
+  displayName  String
+  description  String?  @db.Text
+  priceMonthly Float    @default(0)
+  priceYearly  Float    @default(0)
+  isActive     Boolean  @default(true)
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  features     PackageFeatureLink[]
+  payments     Payment[]
+  subscriptions Subscription[]
+
+  @@map("packages")
+}
+
+model PackageFeature {
+  id          String   @id @default(cuid())
+  name        String   @unique  // e.g. 'members_management'
+  displayName String             // e.g. 'Members Management'
+  description String?  @db.Text
+  // category: core | communication | reporting | management
+  category    String   @default("core")
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  packages  PackageFeatureLink[]
+
+  @@map("package_features")
+}
+
+model PackageFeatureLink {
+  packageId String
+  featureId String
+  limitValue Int?  // For features like max_members, max_churches
+
+  package Package        @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  feature PackageFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@id([packageId, featureId])
+  @@map("package_feature_links")
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  ministryAdminId String
+  packageId       String?
+  amount          Float
+  currency        String   @default("MWK")
+  // type: subscription | upgrade | downgrade | renewal | package_subscription
+  type            String   @default("subscription")
+  // status: pending | completed | failed
+  status          String   @default("pending")
+  // denormalized package name for historical records
+  packageName     String   @default("basic")
+  reference       String?
+  notes           String?  @db.Text
+  // Transaction details
+  transactionId   String?  // Link to Transaction record
+  paymentMethod   String?  // card | mobile_money | bank
+  channel         String?  // Paystack channel used
+  paidAt          DateTime?
+  // Fee breakdown
+  baseAmount      Float?   // Original package price
+  convenienceFee  Float?   // 2% convenience fee
+  systemFeeAmount Float?   // Platform system fee on convenience fee
+  totalAmount     Float?   // baseAmount + convenienceFee + systemFeeAmount
+  gatewayCharge   Float?   // Actual charge reported by gateway
+  systemGatewayFeeRate Float?  // Gateway fee rate used e.g. 0.02 Malawi, 0.029 Kenya
+  systemFeeRate   Float?   // Platform fee rate used e.g. 0.005
+  // Gateway routing
+  gateway         String?  // paystack | paychangu
+  // Subaccount info
+  subaccountCode  String?  // Subaccount code used
+  subaccountName  String?  // Subaccount name
+  // Customer info
+  customerEmail   String?
+  customerPhone   String?
+  cardLast4       String?
+  cardBank        String?
+  // Metadata
+  billingCycle    String?  // monthly | yearly
+  expiresAt       DateTime? // When this subscription expires
+  gatewayResponse String?  @db.LongText // Full Paystack response JSON
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  package         Package? @relation(fields: [packageId], references: [id])
+
+  @@index([ministryAdminId])
+  @@index([status])
+  @@index([paidAt])
+  @@index([reference])
+  @@index([expiresAt])
+  @@map("payments")
+}
+
+
+// ─── Wallet System (Malawi only) ──────────────────────────────────────────────
+
+model Wallet {
+  id              String   @id @default(cuid())
+  churchId        String   @unique
+  ministryAdminId String
+  balance         Float    @default(0)
+  currency        String   @default("MWK")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  church          Church   @relation(fields: [churchId], references: [id])
+  transactions    WalletTransaction[]
+  withdrawals     Withdrawal[]
+
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id              String   @id @default(cuid())
+  walletId        String
+  type            String   // credit | debit
+  amount          Float
+  balanceBefore   Float
+  balanceAfter    Float
+  source          String   // event_ticket | donation | withdrawal | refund
+  sourceId        String?
+  description     String?
+  createdAt       DateTime @default(now())
+
+  wallet          Wallet   @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([createdAt])
+  @@map("wallet_transactions")
+}
+
+model Withdrawal {
+  id              String   @id @default(cuid())
+  walletId        String
+  ministryAdminId String
+  initiatedBy     String?  // User who initiated the withdrawal
+  amount          Float
+  fee             Float
+  netAmount       Float
+  method          String   // mobile_money | bank_transfer
+  status          String   @default("pending") // pending | processing | completed | failed
+  mobileOperator  String?
+  mobileNumber    String?
+  bankCode        String?
+  accountName     String?
+  accountNumber   String?
+  chargeId        String?  @unique
+  gatewayResponse String?  @db.Text
+  failureReason   String?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  wallet          Wallet   @relation(fields: [walletId], references: [id])
+
+  @@index([walletId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("withdrawals")
+}
+
+// ─── KPIs ──────────────────────────────────────────────────────────────────────
+
+model KPI {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?  @db.Text
+  category        String   // Attendance | Giving | Membership | Events
+  metricType      String   // total_attendance | average_attendance | total_giving | new_members | event_count
+  attendanceType  String?  // regular | event (for Attendance category)
+  eventId         String?  // Specific event ID (for event attendance KPIs)
+  targetValue     Float
+  currentValue    Float    @default(0)
+  unit            String   // people | MWK | percentage | events
+  period          String   // monthly | quarterly | yearly
+  startDate       DateTime
+  endDate         DateTime
+  status          String   @default("active") // active | completed | cancelled
+  isRecurring     Boolean  @default(false)
+  recurringActive Boolean  @default(true)
+  parentKpiId     String?
+  recurrenceCount Int      @default(0)
+  ministryAdminId String
+  churchId        String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  church          Church   @relation(fields: [churchId], references: [id])
+
+  @@index([ministryAdminId])
+  @@index([churchId])
+  @@index([category])
+  @@index([status])
+  @@index([churchId, status, metricType])
+  @@index([parentKpiId])
+  @@index([isRecurring, recurringActive, endDate])
+  @@map("kpis")
+}
+
+// ─── Teams ─────────────────────────────────────────────────────────────────────
+
+model Team {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  churchId    String
+  color       String?  // For visual distinction
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  church      Church   @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  members     UserTeam[]
+  communications TeamCommunication[]
+
+  @@index([churchId])
+  @@map("teams")
+}
+
+model UserTeam {
+  userId    String
+  teamId    String
+  isLeader  Boolean  @default(false)
+  assignedAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@id([userId, teamId])
+  @@index([teamId])
+  @@index([userId])
+  @@map("user_teams")
+}
+
+// ─── Team Communication ────────────────────────────────────────────────────────
+
+model TeamCommunication {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text
+  teamId      String
+  authorId    String
+  mediaUrls   Json?    // [{url, type, name, size}]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  team        Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@index([teamId])
+  @@index([authorId])
+  @@index([teamId, createdAt])
+  @@map("team_communications")
+}
+
+// ─── Email Queue ───────────────────────────────────────────────────────────────
+
+model EmailQueue {
+  id          String   @id @default(cuid())
+  to          String
+  subject     String
+  html        String   @db.Text
+  attachments String?  @db.LongText // JSON array of {filename, content(base64)}
+  type        String   // user_created | registration | password_reset | password_changed | ticket_purchase | donation_receipt
+  status      String   @default("pending") // pending | sent | failed
+  attempts    Int      @default(0)
+  error       String?  @db.Text
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("email_queue")
+}
+
+// ─── Reminder Cache ────────────────────────────────────────────────────────────
+
+model ReminderCache {
+  id              String   @id @default(cuid())
+  userId          String
+  type            String   // birthday | wedding | member_anniversary | church_founded | event
+  originalDate    DateTime
+  upcomingDate    DateTime
+  daysUntil       Int
+  age             Int?
+  years           Int?
+  churchId        String
+  ministryAdminId String?
+  eventId         String?  // For event reminders
+  eventTitle      String?  // Denormalized for quick display
+  lastNotified    DateTime?
+  notifyAt        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  church          Church   @relation(fields: [churchId], references: [id], onDelete: Cascade)
+  event           Event?   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, type, upcomingDate, eventId])
+  @@index([upcomingDate])
+  @@index([churchId])
+  @@index([ministryAdminId])
+  @@index([type])
+  @@index([notifyAt])
+  @@index([daysUntil])
+  @@index([eventId])
+  @@map("reminder_cache")
+}
