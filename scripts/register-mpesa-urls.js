@@ -71,7 +71,6 @@ async function getToken() {
   }
   return res.body.access_token;
 }
-
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
   console.log(`\n🔧  Environment : ${MPESA_ENV || 'sandbox'}`);
@@ -79,45 +78,17 @@ async function main() {
   console.log(`🔧  Shortcode   : ${MPESA_SHORTCODE}`);
   console.log(`🔧  Callback URL: ${MPESA_CALLBACK_URL}\n`);
 
-  // 1. Get access token
-  console.log('1️⃣   Fetching access token...');
+  // 1. Get access token to verify credentials are valid
+  console.log('1️⃣   Verifying credentials (fetching access token)...');
   const token = await getToken();
-  console.log('✅  Token obtained\n');
+  console.log('✅  Credentials valid — token obtained\n');
 
-  // 2. Register C2B URLs (ValidationURL + ConfirmationURL)
-  //    These are used for Paybill/Till confirmation flows.
-  const confirmationUrl = `${BACKEND_URL}/api/webhooks/mpesa/callback`;
-  const validationUrl   = `${BACKEND_URL}/api/webhooks/mpesa/callback`;
+  // 2. STK Push callback URL — passed per-request, no registration needed
+  const callbackUrl = `${BACKEND_URL}/api/webhooks/payments/callback`;
 
-  console.log('2️⃣   Registering C2B URLs...');
-  console.log(`    ConfirmationURL : ${confirmationUrl}`);
-  console.log(`    ValidationURL   : ${validationUrl}`);
-
-  const c2bRes = await request(
-    'POST',
-    '/mpesa/c2b/v1/registerurl',
-    {
-      ShortCode:       MPESA_SHORTCODE,
-      ResponseType:    'Completed',       // Completed | Cancelled
-      ConfirmationURL: confirmationUrl,
-      ValidationURL:   validationUrl,
-    },
-    { Authorization: `Bearer ${token}` }
-  );
-
-  if (c2bRes.status === 200 && c2bRes.body.ResponseCode === '0') {
-    console.log('✅  C2B URLs registered successfully');
-    console.log('    Response:', JSON.stringify(c2bRes.body, null, 2));
-  } else {
-    console.warn('⚠️   C2B registration response (may be OK on sandbox):');
-    console.warn('    Status :', c2bRes.status);
-    console.warn('    Body   :', JSON.stringify(c2bRes.body, null, 2));
-  }
-
-  // 3. Verify STK Push callback URL is set (informational — it is passed per-request)
-  console.log('\n3️⃣   STK Push callback URL (set per-request, no registration needed):');
-  console.log(`    ${MPESA_CALLBACK_URL}`);
-  console.log('✅  No action required — this is sent in each STK Push payload.\n');
+  console.log('2️⃣   STK Push callback URL (set per-request in each STK Push payload):');
+  console.log(`    ${callbackUrl}`);
+  console.log('✅  No registration required for STK Push.\n');
 
   console.log('🎉  Done.\n');
 }
