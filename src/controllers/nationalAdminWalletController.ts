@@ -208,8 +208,8 @@ async function dispatchB2C(withdrawal: any, data: any, initiatorName: string) {
 
   const shortCode = process.env.MPESA_B2C_SHORT_CODE!;
   const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL!;
-  const callbackUrl = `${process.env.BACKEND_URL}/api/webhooks/mpesa/b2c-result`;
-  const timeoutUrl  = `${process.env.BACKEND_URL}/api/webhooks/mpesa/b2c-timeout`;
+  const callbackUrl = `${process.env.BACKEND_URL}/api/webhooks/payments/b2c-result`;
+  const timeoutUrl  = `${process.env.BACKEND_URL}/api/webhooks/payments/b2c-timeout`;
 
   const payload = {
     InitiatorName: initiatorName,
@@ -266,8 +266,8 @@ async function dispatchB2B(withdrawal: any, data: any, initiatorName: string) {
 
   const shortCode = process.env.MPESA_B2C_SHORT_CODE!;
   const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL!;
-  const callbackUrl = `${process.env.BACKEND_URL}/api/webhooks/mpesa/b2b-result`;
-  const timeoutUrl  = `${process.env.BACKEND_URL}/api/webhooks/mpesa/b2b-timeout`;
+  const callbackUrl = `${process.env.BACKEND_URL}/api/webhooks/payments/b2b-result`;
+  const timeoutUrl  = `${process.env.BACKEND_URL}/api/webhooks/payments/b2b-timeout`;
 
   const payload = {
     Initiator: initiatorName,
