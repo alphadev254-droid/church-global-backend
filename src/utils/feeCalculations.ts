@@ -7,61 +7,36 @@ interface PaymentFees {
   systemFeeRate: number;
 }
 
-function requireEnv(key: string): number {
-  const val = process.env[key];
-  if (!val) throw new Error('Payment configuration is not available. Please contact support.');
-  const num = parseFloat(val);
-  if (isNaN(num)) throw new Error('Payment configuration is not available. Please contact support.');
-  return num;
-}
-
-export function calculatePaymentFees(baseAmount: number, country?: string): PaymentFees {
-  const PAYSTACK_FEE_RATE  = requireEnv('PAYSTACK_FEE_RATE') / 100;
-  const PAYCHANGU_FEE_RATE = requireEnv('PAYMENT_CONVENIENCE_FEE_PERCENTAGE') / 100;
-
-  const gatewayFeeRate = country === 'Kenya' ? PAYSTACK_FEE_RATE : PAYCHANGU_FEE_RATE;
-  const convenienceFee = baseAmount * gatewayFeeRate;
-
-  const KENYA_SYSTEM_FEE_RATE  = requireEnv('CONVENIENCE_RATE_KENYA') / 100;
-  const MALAWI_SYSTEM_FEE_RATE = requireEnv('CONVENIENCE_RATE_MALAWI') / 100;
-  const systemFeeRate   = country === 'Kenya' ? KENYA_SYSTEM_FEE_RATE : MALAWI_SYSTEM_FEE_RATE;
-  const systemFeeAmount = baseAmount * systemFeeRate;
-
-  const totalAmount = baseAmount + convenienceFee + systemFeeAmount;
-
+// No fees charged — user pays the exact package/event/donation amount
+export function calculatePaymentFees(baseAmount: number, _country?: string): PaymentFees {
+  const amount = parseFloat(baseAmount.toFixed(2));
   return {
-    baseAmount:           parseFloat(baseAmount.toFixed(2)),
-    convenienceFee:       parseFloat(convenienceFee.toFixed(2)),
-    systemFeeAmount:      parseFloat(systemFeeAmount.toFixed(2)),
-    totalAmount:          parseFloat(totalAmount.toFixed(2)),
-    systemGatewayFeeRate: gatewayFeeRate,
-    systemFeeRate,
+    baseAmount:           amount,
+    convenienceFee:       0,
+    systemFeeAmount:      0,
+    totalAmount:          amount,
+    systemGatewayFeeRate: 0,
+    systemFeeRate:        0,
   };
 }
 
-interface WithdrawalFees {
-  amount: number;
-  fee: number;
-  netAmount: number;
-}
-
-export function calculateWithdrawalFee(
-  amount: number,
-  method: 'mobile_money' | 'bank_transfer'
-): WithdrawalFees {
-  let fee: number;
-
-  if (method === 'mobile_money') {
-    fee = amount * (requireEnv('WITHDRAWAL_MOBILE_MONEY_FEE_RATE'));
-  } else {
-    fee = (amount * requireEnv('WITHDRAWAL_BANK_FEE_RATE')) + requireEnv('WITHDRAWAL_BANK_FIXED_FEE');
+// ─── B2C fee (M-Pesa send money tariff, paid by business) ────────────────────
+export function calculateB2CFee(amount: number): number {
+  const tiers = [
+    { max: parseFloat(process.env.MPESA_B2C_FEE_TIER_1_MAX || '100'),    fee: parseFloat(process.env.MPESA_B2C_FEE_TIER_1_FEE || '0') },
+    { max: parseFloat(process.env.MPESA_B2C_FEE_TIER_2_MAX || '500'),    fee: parseFloat(process.env.MPESA_B2C_FEE_TIER_2_FEE || '7') },
+    { max: parseFloat(process.env.MPESA_B2C_FEE_TIER_3_MAX || '1000'),   fee: parseFloat(process.env.MPESA_B2C_FEE_TIER_3_FEE || '13') },
+    { max: parseFloat(process.env.MPESA_B2C_FEE_TIER_4_MAX || '250000'), fee: parseFloat(process.env.MPESA_B2C_FEE_TIER_4_FEE || '108') },
+  ];
+  for (const tier of tiers) {
+    if (amount <= tier.max) return tier.fee;
   }
+  return tiers[tiers.length - 1].fee;
+}
 
-  const netAmount = amount - fee;
-
-  return {
-    amount: parseFloat(amount.toFixed(2)),
-    fee: parseFloat(fee.toFixed(2)),
-    netAmount: parseFloat(netAmount.toFixed(2))
-  };
+// ─── B2B fee (percentage, capped) ────────────────────────────────────────────
+export function calculateB2BFee(amount: number): number {
+  const rate = parseFloat(process.env.MPESA_B2B_FEE_RATE || '0.0025');
+  const cap  = parseFloat(process.env.MPESA_B2B_FEE_CAP  || '200');
+  return Math.min(parseFloat((amount * rate).toFixed(2)), cap);
 }

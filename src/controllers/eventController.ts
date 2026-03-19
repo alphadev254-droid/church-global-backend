@@ -23,7 +23,7 @@ const baseEventSchema = z.object({
   requiresTicket: z.boolean().optional().default(false),
   isFree: z.boolean().optional().default(true),
   ticketPrice: z.number().nullable().optional(),
-  currency: z.enum(['MWK', 'KSH']).optional(),
+  currency: z.enum(['MWK', 'KES']).optional(),
   totalTickets: z.number().optional(),
   ticketSalesCutoff: z.string().optional(),
   allowPublicTicketing: z.boolean().optional().default(false),
@@ -41,7 +41,7 @@ const bookTicketSchema = z.object({
   paymentMethod: z.enum(['cash', 'mobile_money', 'card', 'bank_transfer']).optional().default('cash'),
   reference: z.string().optional(),
   amount: z.number().optional(),
-  currency: z.enum(['MWK', 'KSH']).optional(),
+  currency: z.enum(['MWK', 'KES']).optional(),
   transactionStatus: z.enum(['pending', 'completed', 'failed']).optional().default('completed'),
   ticketStatus: z.enum(['confirmed', 'pending', 'cancelled', 'used']).optional().default('confirmed'),
   notes: z.string().optional(),
@@ -184,20 +184,7 @@ export async function createEvent(req: Request, res: Response): Promise<void> {
     const { getPaymentGateway } = await import('../utils/gatewayRouter');
     const gateway = await getPaymentGateway(userId);
     
-    if (gateway === 'paystack') {
-      // Kenya account - check for subaccount
-      const subaccount = await prisma.subaccount.findUnique({
-        where: { churchId: parsed.data.churchId }
-      });
-      
-      if (!subaccount) {
-        res.status(400).json({ 
-          success: false, 
-          message: 'To create giving campaigns, you need to set up a Paystack subaccount first. Please go to Branches > Finance account management to create your finance account..' 
-        });
-        return;
-      }
-    }
+    // M-Pesa (Kenya) and Paychangu (Malawi) both work without subaccounts
   }
 
   const event = await prisma.event.create({
@@ -349,25 +336,31 @@ export async function getMyTickets(req: Request, res: Response): Promise<void> {
 
 export async function getEventTickets(req: Request, res: Response): Promise<void> {
   const eventId = String(req.params.id);
-  const tickets = await prisma.eventTicket.findMany({
-    where: { eventId },
-    select: {
-      id: true,
-      ticketNumber: true,
-      status: true,
-      attended: true,
-      attendedAt: true,
-      createdAt: true,
-      isGuest: true,
-      guestName: true,
-      guestEmail: true,
-      guestPhone: true,
-      user: { select: { id: true, firstName: true, lastName: true, email: true } },
-      transaction: { select: { amount: true, baseAmount: true, currency: true, paymentMethod: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
-  res.json({ success: true, data: tickets });
+  const [tickets, totalAmount] = await Promise.all([
+    prisma.eventTicket.findMany({
+      where: { eventId },
+      select: {
+        id: true,
+        ticketNumber: true,
+        status: true,
+        attended: true,
+        attendedAt: true,
+        createdAt: true,
+        isGuest: true,
+        guestName: true,
+        guestEmail: true,
+        guestPhone: true,
+        user: { select: { id: true, firstName: true, lastName: true, email: true } },
+        transaction: { select: { amount: true, baseAmount: true, currency: true, paymentMethod: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.transaction.aggregate({
+      where: { eventId, status: 'completed' },
+      _sum: { amount: true },
+    }),
+  ]);
+  res.json({ success: true, data: tickets, totalAmount: totalAmount._sum.amount ?? 0 });
 }
 
 export async function markAttendance(req: Request, res: Response): Promise<void> {
@@ -497,10 +490,7 @@ export async function getTicketTransaction(req: Request, res: Response): Promise
             status: true,
             reference: true,
             paidAt: true,
-            channel: true,
             baseAmount: true,
-            convenienceFee: true,
-            systemFeeAmount: true,
             totalAmount: true,
             gateway: true,
           },
@@ -526,17 +516,11 @@ export async function getTicketTransaction(req: Request, res: Response): Promise
             status: true,
             reference: true,
             paidAt: true,
-            channel: true,
-            customerEmail: true,
-            customerPhone: true,
             type: true,
             isManual: true,
             notes: true,
             createdAt: true,
-            subaccountName: true,
             baseAmount: true,
-            convenienceFee: true,
-            systemFeeAmount: true,
             totalAmount: true,
             gateway: true,
           },

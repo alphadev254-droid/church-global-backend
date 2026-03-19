@@ -12,12 +12,10 @@ export async function getTransactions(req: Request, res: Response): Promise<void
     return;
   }
 
-  // Pagination params
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.max(100, parseInt(req.query.limit as string) || 100);
   const skip = (page - 1) * limit;
 
-  // Search and filter params
   const search = (req.query.search as string)?.trim() || '';
   const type = req.query.type as string | undefined;
   const status = req.query.status as string | undefined;
@@ -26,16 +24,32 @@ export async function getTransactions(req: Request, res: Response): Promise<void
   const startDate = req.query.startDate as string | undefined;
   const endDate = req.query.endDate as string | undefined;
 
+  const txSelect = {
+    id: true,
+    amount: true,
+    currency: true,
+    status: true,
+    type: true,
+    paymentMethod: true,
+    isManual: true,
+    baseAmount: true,
+    totalAmount: true,
+    gateway: true,
+    isGuest: true,
+    guestName: true,
+    guestEmail: true,
+    createdAt: true,
+  };
+
   let churchIds: string[] = [];
 
   if (roleName === 'ministry_admin') {
     const churches = await prisma.church.findMany({
       where: { ministryAdminId: userId },
-      select: { id: true }
+      select: { id: true },
     });
     churchIds = churches.map(c => c.id);
   } else if (roleName === 'member') {
-    // Members see only their own transactions
     const whereClause: any = { userId };
     if (type) whereClause.type = type;
     if (status) whereClause.status = status;
@@ -53,38 +67,18 @@ export async function getTransactions(req: Request, res: Response): Promise<void
       if (endDate) whereClause.createdAt.lte = new Date(endDate);
     }
 
-    const [transactions, total] = await Promise.all([
+  const [transactions, total, totalAmount] = await Promise.all([
       prisma.transaction.findMany({
         where: whereClause,
-        select: {
-          id: true,
-          amount: true,
-          currency: true,
-          status: true,
-          type: true,
-          paymentMethod: true,
-          isManual: true,
-          subaccountName: true,
-          cardLast4: true,
-          cardBank: true,
-          baseAmount: true,
-          convenienceFee: true,
-          systemFeeAmount: true,
-          totalAmount: true,
-          gateway: true,
-          isGuest: true,
-          guestName: true,
-          guestEmail: true,
-          createdAt: true,
-          church: { select: { name: true } },
-        },
+        select: { ...txSelect, church: { select: { name: true } } },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
       }),
       prisma.transaction.count({ where: whereClause }),
+      prisma.transaction.aggregate({ where: whereClause, _sum: { amount: true } }),
     ]);
-    res.json({ success: true, data: transactions, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+    res.json({ success: true, data: transactions, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, totalAmount: totalAmount._sum.amount ?? 0 });
     return;
   } else {
     if (!churchId) {
@@ -94,7 +88,6 @@ export async function getTransactions(req: Request, res: Response): Promise<void
     churchIds = await getAccessibleChurchIds(roleName, churchId, req.user?.districts, req.user?.traditionalAuthorities, req.user?.regions, userId);
   }
 
-  // Build where clause for admins
   const whereClause: any = { churchId: { in: churchIds } };
   if (filterChurchId && churchIds.includes(filterChurchId)) whereClause.churchId = filterChurchId;
   if (type) whereClause.type = type;
@@ -113,29 +106,11 @@ export async function getTransactions(req: Request, res: Response): Promise<void
     if (endDate) whereClause.createdAt.lte = new Date(endDate);
   }
 
-  const [transactions, total] = await Promise.all([
+  const [transactions, total, totalAmount] = await Promise.all([
     prisma.transaction.findMany({
       where: whereClause,
       select: {
-        id: true,
-        amount: true,
-        currency: true,
-        status: true,
-        type: true,
-        paymentMethod: true,
-        isManual: true,
-        subaccountName: true,
-        cardLast4: true,
-        cardBank: true,
-        baseAmount: true,
-        convenienceFee: true,
-        systemFeeAmount: true,
-        totalAmount: true,
-        gateway: true,
-        isGuest: true,
-        guestName: true,
-        guestEmail: true,
-        createdAt: true,
+        ...txSelect,
         user: { select: { firstName: true, lastName: true, email: true } },
         church: { select: { name: true } },
       },
@@ -144,18 +119,19 @@ export async function getTransactions(req: Request, res: Response): Promise<void
       take: limit,
     }),
     prisma.transaction.count({ where: whereClause }),
+    prisma.transaction.aggregate({ where: whereClause, _sum: { amount: true } }),
   ]);
-  res.json({ success: true, data: transactions, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+  res.json({ success: true, data: transactions, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) }, totalAmount: totalAmount._sum.amount ?? 0 });
 }
 
 export async function getTransaction(req: Request, res: Response): Promise<void> {
-  const transaction = await prisma.transaction.findUnique({ 
+  const transaction = await prisma.transaction.findUnique({
     where: { id: String(req.params.id) },
-    include: { 
+    include: {
       user: { select: { firstName: true, lastName: true, email: true } },
       church: { select: { name: true } },
-      tickets: { include: { event: true } }
-    }
+      tickets: { include: { event: true } },
+    },
   });
   if (!transaction) { res.status(404).json({ success: false, message: 'Transaction not found' }); return; }
   res.json({ success: true, data: transaction });
@@ -167,7 +143,6 @@ export async function updateTransactionStatus(req: Request, res: Response): Prom
     res.status(400).json({ success: false, message: 'Invalid status' });
     return;
   }
-
   const transaction = await prisma.transaction.update({
     where: { id: String(req.params.id) },
     data: { status },

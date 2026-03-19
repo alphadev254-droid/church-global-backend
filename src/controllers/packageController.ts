@@ -44,10 +44,8 @@ export async function getPackages(req: Request, res: Response): Promise<void> {
     }
   }
 
-  const isMalawi = accountCountry === 'Malawi';
-  const currency = isMalawi ? 'MWK' : 'KES';
-  const rateKey = isMalawi ? 'USD_TO_MWK_RATE' : 'USD_TO_KSH_RATE';
-  const rateVal = process.env[rateKey];
+  const currency = 'KES';
+  const rateVal = process.env['USD_TO_KSH_RATE'];
   if (!rateVal || isNaN(parseFloat(rateVal))) throw new Error('Payment configuration is not available. Please contact support.');
   const rate = parseFloat(rateVal);
 
@@ -221,26 +219,20 @@ export async function calculateFees(req: Request, res: Response): Promise<void> 
     : null;
   const country = admin?.accountCountry || 'Kenya';
 
-  const isMalawi = country === 'Malawi';
-  const currency = isMalawi ? 'MWK' : 'KES';
-  const usdRateKey = isMalawi ? 'USD_TO_MWK_RATE' : 'USD_TO_KSH_RATE';
-  const usdRateVal = process.env[usdRateKey];
+  const currency = 'KES';
+  const usdRateVal = process.env['USD_TO_KSH_RATE'];
   if (!usdRateVal || isNaN(parseFloat(usdRateVal))) throw new Error('Payment configuration is not available. Please contact support.');
   const usdRate = parseFloat(usdRateVal);
 
   const baseUSD = billingCycle === 'monthly' ? pkg.priceMonthly : pkg.priceYearly;
-  const { calculatePaymentFees } = await import('../utils/feeCalculations');
-  const fees = calculatePaymentFees(parseFloat((baseUSD * usdRate).toFixed(2)), country);
+  const baseAmount = parseFloat((baseUSD * usdRate).toFixed(2));
 
   res.json({
     success: true,
     data: {
       currency,
-      baseAmount: fees.baseAmount,
-      convenienceFee: fees.convenienceFee,
-      systemFeeAmount: fees.systemFeeAmount,
-      transactionCost: parseFloat((fees.convenienceFee + fees.systemFeeAmount).toFixed(2)),
-      totalAmount: fees.totalAmount,
+      baseAmount,
+      totalAmount: baseAmount,
     },
   });
 }
@@ -277,8 +269,6 @@ export async function getPayments(req: Request, res: Response): Promise<void> {
       packageName: true,
       amount: true,
       baseAmount: true,
-      convenienceFee: true,
-      systemFeeAmount: true,
       totalAmount: true,
       currency: true,
       reference: true,

@@ -158,6 +158,7 @@ async function main() {
         firstName: 'Admin',
         lastName: 'User',
         roleId: ministryAdminRole.id,
+        accountCountry: 'Kenya'
       },
     });
     console.log('✅ Created admin user: admin@icims.org\n');

@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import { z } from 'zod';
-import axios from 'axios';
 import prisma from '../lib/prisma';
 import { groupByDateRanges } from '../lib/dateGrouping';
 import { getAccessibleChurchIds } from '../lib/churchScope';
@@ -12,7 +11,7 @@ const createCampaignSchema = z.object({
   category: z.enum(['tithe', 'offering', 'partnership', 'welfare', 'missions']),
   subcategory: z.string().optional(),
   targetAmount: z.number().positive().optional().or(z.literal(0)).or(z.nan()).transform(val => val && val > 0 ? val : undefined),
-  currency: z.enum(['MWK', 'KSH']).default('MWK'),
+  currency: z.literal('KES').default('KES'),
   endDate: z.string().optional(),
   imageUrl: z.string().optional(),
 });
@@ -22,7 +21,7 @@ const updateCampaignSchema = z.object({
   description: z.string().optional(),
   subcategory: z.string().optional(),
   targetAmount: z.number().positive().optional().or(z.literal(0)).or(z.nan()).transform(val => val && val > 0 ? val : undefined),
-  currency: z.enum(['MWK', 'KSH']).optional(),
+  currency: z.literal('KES').optional(),
   status: z.enum(['active', 'completed', 'cancelled']).optional(),
   endDate: z.string().optional(),
   imageUrl: z.string().optional(),
@@ -48,25 +47,6 @@ export async function createCampaign(req: Request, res: Response): Promise<void>
   }
 
   const { churchId: targetChurchId, endDate, ...data } = parsed.data;
-
-  // Check if Kenya account has subaccount for receiving donations
-  const { getPaymentGateway } = await import('../utils/gatewayRouter');
-  const gateway = await getPaymentGateway(userId!);
-  
-  if (gateway === 'paystack') {
-    // Kenya account - check for subaccount
-    const subaccount = await prisma.subaccount.findUnique({
-      where: { churchId: targetChurchId }
-    });
-    
-    if (!subaccount) {
-      res.status(400).json({ 
-        success: false, 
-        message: 'To create giving campaigns, you need to set up a Paystack subaccount first. Please go to Branches > Finance account management to create your finance account.' 
-      });
-      return;
-    }
-  }
 
   // Verify user has access to this church
   const accessibleChurchIds = await getAccessibleChurchIds(
@@ -323,44 +303,50 @@ export async function getDonations(req: Request, res: Response): Promise<void> {
     userId
   );
 
-  const donations = await prisma.donationTransaction.findMany({
-    where: {
-      ...(campaignId && { campaignId: String(campaignId) }),
-      ...(churchId && { churchId: String(churchId) }),
-      ...(accessibleChurchIds.length > 0 && { churchId: { in: accessibleChurchIds } }),
-    },
-    select: {
-      id: true,
-      amount: true,
-      currency: true,
-      status: true,
-      isAnonymous: true,
-      donorName: true,
-      donorEmail: true,
-      isGuest: true,
-      guestName: true,
-      guestEmail: true,
-      guestPhone: true,
-      notes: true,
-      createdAt: true,
-      campaign: { select: { name: true, category: true } },
-      church: { select: { name: true } },
-      user: { select: { firstName: true, lastName: true, email: true } },
-    },
-    orderBy: { createdAt: 'desc' },
-  });
+  const donationWhere = {
+    ...(campaignId && { campaignId: String(campaignId) }),
+    ...(churchId && { churchId: String(churchId) }),
+    ...(accessibleChurchIds.length > 0 && { churchId: { in: accessibleChurchIds } }),
+  };
 
-  res.json({ success: true, data: donations });
+  const [donations, totalAmount] = await Promise.all([
+    prisma.donationTransaction.findMany({
+      where: donationWhere,
+      select: {
+        id: true,
+        amount: true,
+        currency: true,
+        status: true,
+        isAnonymous: true,
+        donorName: true,
+        donorEmail: true,
+        isGuest: true,
+        guestName: true,
+        guestEmail: true,
+        guestPhone: true,
+        notes: true,
+        createdAt: true,
+        campaign: { select: { name: true, category: true } },
+        church: { select: { name: true } },
+        user: { select: { firstName: true, lastName: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    }),
+    prisma.donationTransaction.aggregate({ where: { ...donationWhere, status: 'completed' }, _sum: { amount: true } }),
+  ]);
+
+  res.json({ success: true, data: donations, totalAmount: totalAmount._sum.amount ?? 0 });
 }
 
 const createDonationSchema = z.object({
-  campaignId: z.string().min(1),
-  amount: z.number().positive(),
+  campaignId:  z.string().min(1),
+  amount:      z.number().positive(),
+  phone:       z.string().optional(), // required for Kenya M-Pesa
   isAnonymous: z.boolean().optional().default(false),
-  donorName: z.string().optional(),
-  donorEmail: z.string().email().optional(),
-  donorPhone: z.string().optional(),
-  notes: z.string().optional(),
+  donorName:   z.string().optional(),
+  donorEmail:  z.string().email().optional(),
+  donorPhone:  z.string().optional(),
+  notes:       z.string().optional(),
 });
 
 export async function createDonation(req: Request, res: Response): Promise<void> {
@@ -377,7 +363,7 @@ export async function createDonation(req: Request, res: Response): Promise<void>
     return;
   }
 
-  const { campaignId, amount, isAnonymous, donorName, donorEmail, donorPhone, notes } = parsed.data;
+  const { campaignId, amount, phone, isAnonymous, donorName, donorEmail, donorPhone, notes } = parsed.data;
 
   const campaign = await prisma.givingCampaign.findUnique({ where: { id: campaignId } });
   if (!campaign) {
@@ -403,7 +389,7 @@ export async function createDonation(req: Request, res: Response): Promise<void>
   // Calculate fees
   const fees = calculatePaymentFees(amount, gatewayCountry);
   
-  console.log(`[${traceId}] Fees - Base: ${fees.baseAmount}, Convenience: ${fees.convenienceFee}, Tax: ${fees.systemFeeAmount}, Total: ${fees.totalAmount}`);
+  console.log(`[${traceId}] Amount: ${fees.baseAmount} ${currency}`);
 
   // Create pending transaction
   const expiresAt = new Date();
@@ -423,192 +409,89 @@ export async function createDonation(req: Request, res: Response): Promise<void>
         campaignName: campaign.name,
         isAnonymous,
         donorName,
-        donorPhone,
+        donorPhone:   phone || donorPhone || null,
         notes,
-        baseAmount: fees.baseAmount,
-        convenienceFee: fees.convenienceFee,
-        systemFeeAmount: fees.systemFeeAmount,
-        totalAmount: fees.totalAmount,
+        baseAmount:   fees.baseAmount,
+        totalAmount:  fees.totalAmount,
         gateway,
-        gatewayCountry,
       }),
     },
   });
 
   console.log(`[${traceId}] Pending transaction created: ${pendingTx.id}`);
 
-  // Route to gateway
-  if (gateway === 'paychangu') {
-    return await initiatePaychanguDonation(pendingTx, userEmail!, donorEmail, fees, traceId, res);
-  } else {
-    return await initiatePaystackDonation(pendingTx, userEmail!, donorEmail, campaign, fees, currency, traceId, res);
-  }
+  return await initiateMpesaDonation(pendingTx, fees, traceId, res);
 }
 
-async function initiatePaystackDonation(
+async function initiateMpesaDonation(
   pendingTx: any,
-  userEmail: string,
-  donorEmail: string | undefined,
-  campaign: any,
-  fees: any,
-  currency: string,
-  traceId: string,
-  res: Response
-): Promise<void> {
-  console.log(`[${traceId}] Routing to Paystack`);
-  
-  const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY!;
-  const PAYSTACK_BASE_URL = process.env.PAYSTACK_BASE_URL || 'https://api.paystack.co';
-  const BACKEND_URL = process.env.BACKEND_URL!;
-
-  try {
-    const metadata = JSON.parse(pendingTx.metadata);
-    const amountInKobo = Math.round(fees.totalAmount * 100);
-    const isGuest = metadata.isGuest === true;
-    const callbackUrl = isGuest
-      ? `${BACKEND_URL}/api/payments/verify?guestEmail=${encodeURIComponent(metadata.guestEmail)}&guestName=${encodeURIComponent(metadata.guestName)}&isGuest=true&type=donation`
-      : `${BACKEND_URL}/api/payments/verify`;
-    
-    // Get church subaccount
-    const subaccount = await prisma.subaccount.findUnique({
-      where: { churchId: campaign.churchId }
-    });
-
-    console.log(`[${traceId}] Subaccount found: ${subaccount ? subaccount.subaccountCode : 'NONE'}`);
-    console.log(`[${traceId}] Subaccount name: ${subaccount ? subaccount.businessName : 'NONE'}`);
-
-    const paystackPayload = {
-      email: donorEmail || userEmail,
-      amount: amountInKobo,
-      currency: 'KES',
-      callback_url: callbackUrl,
-      metadata: {
-        ...metadata,
-        type: 'donation',
-        pendingTxId: pendingTx.id,
-        userId: pendingTx.userId,
-        subaccountCode: subaccount?.subaccountCode,
-        subaccountName: subaccount?.businessName,
-      },
-      ...(subaccount && {
-        subaccount: subaccount.subaccountCode,
-        transaction_charge: Math.round((fees.convenienceFee + fees.systemFeeAmount) * 100),
-        bearer: 'account',
-      }),
-    };
-
-    const response = await axios.post(
-      `${PAYSTACK_BASE_URL}/transaction/initialize`,
-      paystackPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    await prisma.pendingTransaction.update({
-      where: { id: pendingTx.id },
-      data: { reference: response.data.data.reference },
-    });
-
-    console.log(`[${traceId}] Paystack SUCCESS`);
-    res.json({
-      success: true,
-      data: {
-        authorization_url: response.data.data.authorization_url,
-        reference: response.data.data.reference,
-        baseAmount: fees.baseAmount,
-        convenienceFee: fees.convenienceFee,
-        systemFeeAmount: fees.systemFeeAmount,
-        totalAmount: fees.totalAmount,
-        currency,
-      },
-    });
-  } catch (error: any) {
-    await prisma.pendingTransaction.delete({ where: { id: pendingTx.id } }).catch(() => {});
-    console.error(`[${traceId}] Paystack error:`, error.message);
-    res.status(500).json({
-      success: false,
-      message: error.response?.data?.message || 'Failed to initialize payment',
-    });
-  }
-}
-
-async function initiatePaychanguDonation(
-  pendingTx: any,
-  userEmail: string,
-  donorEmail: string | undefined,
   fees: any,
   traceId: string,
   res: Response
 ): Promise<void> {
-  console.log(`[${traceId}] Routing to Paychangu`);
-  
-  const PAYCHANGU_SECRET_KEY = process.env.PAYCHANGU_SECRET_KEY!;
-  const BACKEND_URL = process.env.BACKEND_URL!;
-  const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:8080';
-  const tx_ref = `DON-${Date.now()}`;
+  console.log(`[${traceId}] Routing to M-Pesa`);
+
+  const { initiateStkPush, formatMpesaPhone } = await import('../utils/mpesa');
+  const metadata = JSON.parse(pendingTx.metadata);
+
+  // Phone must be in metadata (set by caller) or pendingTx
+  const rawPhone = metadata.donorPhone || pendingTx.mpesaPhoneNumber;
+  if (!rawPhone) {
+    await prisma.pendingTransaction.delete({ where: { id: pendingTx.id } }).catch(() => {});
+    res.status(400).json({ success: false, message: 'Phone number is required for M-Pesa payment' });
+    return;
+  }
+
+  let formattedPhone: string;
+  try {
+    formattedPhone = formatMpesaPhone(rawPhone);
+  } catch {
+    await prisma.pendingTransaction.delete({ where: { id: pendingTx.id } }).catch(() => {});
+    res.status(400).json({ success: false, message: 'Invalid Kenyan phone number' });
+    return;
+  }
 
   try {
-    const metadata = JSON.parse(pendingTx.metadata);
-    const isGuest = metadata.isGuest === true;
-    const returnUrl = isGuest
-      ? `${FRONTEND_URL}/payment/callback?status=success&type=donation&isGuest=true&reference=${tx_ref}&guestEmail=${encodeURIComponent(metadata.guestEmail)}&guestName=${encodeURIComponent(metadata.guestName)}&amount=${metadata.baseAmount}&currency=MWK`
-      : `${FRONTEND_URL}/payment/callback?status=success&type=donation&reference=${tx_ref}`;
-    
-    const paychanguPayload = {
-      amount: fees.totalAmount,
-      currency: 'MWK',
-      email: donorEmail || userEmail,
-      tx_ref,
-      callback_url: `${BACKEND_URL}/api/webhooks/paychangu/callback`,
-      return_url: returnUrl,
-      customization: {
-        title: `Donation: ${metadata.campaignName}`,
-        description: 'Campaign donation'
-      }
-    };
+    // Get church mpesaAccountRef
+    const church = await prisma.church.findUnique({
+      where: { id: pendingTx.churchId },
+      select: { name: true, mpesaAccountRef: true },
+    });
 
-    const response = await axios.post(
-      'https://api.paychangu.com/payment',
-      paychanguPayload,
-      {
-        headers: {
-          Authorization: `Bearer ${PAYCHANGU_SECRET_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
+    await prisma.pendingTransaction.update({
+      where: { id: pendingTx.id },
+      data:  { mpesaPhoneNumber: formattedPhone },
+    });
+
+    const stk = await initiateStkPush(
+      formattedPhone,
+      fees.totalAmount,
+      church?.mpesaAccountRef || church?.name.substring(0, 12) || 'DONATION',
+      `Donation-${metadata.campaignName?.substring(0, 7) || 'Campaign'}`
     );
 
     await prisma.pendingTransaction.update({
       where: { id: pendingTx.id },
-      data: { reference: tx_ref },
+      data:  { mpesaCheckoutRequestId: stk.checkoutRequestId },
     });
 
-    console.log(`[${traceId}] Paychangu SUCCESS`);
+    console.log(`[${traceId}] M-Pesa STK push sent: ${stk.checkoutRequestId}`);
     res.json({
       success: true,
       data: {
-        authorization_url: response.data.data?.checkout_url,
-        reference: tx_ref,
-        baseAmount: fees.baseAmount,
-        convenienceFee: fees.convenienceFee,
-        systemFeeAmount: fees.systemFeeAmount,
-        totalAmount: fees.totalAmount,
-        currency: 'MWK',
+        checkoutRequestId: stk.checkoutRequestId,
+        customerMessage:   stk.customerMessage,
+        totalAmount:       fees.totalAmount,
+        currency:          'KES',
       },
     });
   } catch (error: any) {
     await prisma.pendingTransaction.delete({ where: { id: pendingTx.id } }).catch(() => {});
-    console.error(`[${traceId}] Paychangu error:`, error.message);
-    res.status(500).json({
-      success: false,
-      message: error.response?.data?.message || 'Failed to initialize payment',
-    });
+    console.error(`[${traceId}] M-Pesa error:`, error.message);
+    res.status(500).json({ success: false, message: error.message || 'Failed to initiate M-Pesa payment' });
   }
 }
+
 
 export async function getGuestDonationFees(req: Request, res: Response): Promise<void> {
   const { campaignId, amount } = req.query as { campaignId: string; amount: string };
@@ -640,9 +523,7 @@ export async function getGuestDonationFees(req: Request, res: Response): Promise
     success: true,
     data: {
       currency,
-      baseAmount: fees.baseAmount,
-      convenienceFee: fees.convenienceFee,
-      systemFeeAmount: fees.systemFeeAmount,
+      baseAmount:  fees.baseAmount,
       totalAmount: fees.totalAmount,
     },
   });
@@ -672,11 +553,11 @@ export async function getPublicCampaign(req: Request, res: Response): Promise<vo
 }
 
 const guestDonationSchema = z.object({
-  campaignId: z.string().min(1),
-  amount: z.number().positive(),
-  guestName: z.string().min(1),
-  guestEmail: z.string().email(),
-  guestPhone: z.string().optional(),
+  campaignId:  z.string().min(1),
+  amount:      z.number().positive(),
+  guestName:   z.string().min(1),
+  guestEmail:  z.string().email(),
+  guestPhone:  z.string().optional(), // required for Kenya M-Pesa
 });
 
 export async function createGuestDonation(req: Request, res: Response): Promise<void> {
@@ -724,28 +605,22 @@ export async function createGuestDonation(req: Request, res: Response): Promise<
         traceId,
         campaignId,
         campaignName: campaign.name,
-        isGuest: true,
+        isGuest:      true,
         guestName,
         guestEmail,
-        guestPhone: guestPhone || null,
-        isAnonymous: false,
-        baseAmount: fees.baseAmount,
-        convenienceFee: fees.convenienceFee,
-        systemFeeAmount: fees.systemFeeAmount,
-        totalAmount: fees.totalAmount,
+        guestPhone:   guestPhone || null,
+        donorPhone:   guestPhone || null,
+        isAnonymous:  false,
+        baseAmount:   fees.baseAmount,
+        totalAmount:  fees.totalAmount,
         gateway,
-        gatewayCountry,
       }),
     },
   });
 
   console.log(`[${traceId}] Pending transaction created: ${pendingTx.id}`);
 
-  if (gateway === 'paychangu') {
-    return await initiatePaychanguDonation(pendingTx, guestEmail, guestEmail, fees, traceId, res);
-  } else {
-    return await initiatePaystackDonation(pendingTx, guestEmail, guestEmail, campaign, fees, currency, traceId, res);
-  }
+  return await initiateMpesaDonation(pendingTx, fees, traceId, res);
 }
 
 export async function getDonationTransaction(req: Request, res: Response): Promise<void> {
@@ -786,10 +661,7 @@ export async function getDonationTransaction(req: Request, res: Response): Promi
         status: true,
         reference: true,
         paidAt: true,
-        channel: true,
         baseAmount: true,
-        convenienceFee: true,
-        systemFeeAmount: true,
         totalAmount: true,
         gateway: true,
       },
@@ -806,18 +678,12 @@ export async function getDonationTransaction(req: Request, res: Response): Promi
         status: true,
         reference: true,
         paidAt: true,
-        channel: true,
         gatewayResponse: true,
-        customerEmail: true,
-        customerPhone: true,
         type: true,
         isManual: true,
         notes: true,
         createdAt: true,
-        subaccountName: true,
-          baseAmount: true,
-        convenienceFee: true,
-        systemFeeAmount: true,
+        baseAmount: true,
         totalAmount: true,
         gateway: true,
       },

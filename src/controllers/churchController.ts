@@ -146,6 +146,11 @@ export async function createChurch(req: Request, res: Response): Promise<void> {
   // Handle logo upload
   const logoUrl = req.file ? `/uploads/churches/${req.file.filename}` : undefined;
 
+  // Auto-generate M-Pesa account reference for Kenya branches
+  const mpesaAccountRef = adminUser.accountCountry === 'Kenya'
+    ? name.replace(/[^A-Z0-9]/gi, '').substring(0, 12).toUpperCase()
+    : undefined;
+
   const church = await prisma.church.create({
     data: {
       name, location, country,
@@ -154,6 +159,7 @@ export async function createChurch(req: Request, res: Response): Promise<void> {
       branchCode,
       logoUrl,
       ministryAdminId: adminUserId,
+      ...(mpesaAccountRef && { mpesaAccountRef }),
     },
     include: { _count: { select: { users: true } } },
   });

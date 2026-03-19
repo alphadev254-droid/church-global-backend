@@ -149,7 +149,8 @@ model Church {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
-  inviteToken   String?  @unique
+  inviteToken      String?  @unique
+  mpesaAccountRef  String?  // e.g. "GRACECHURCH" — auto-set on Kenya branch creation, used as M-Pesa account reference
 
   ministryAdmin User?          @relation("MinistryAdminChurches", fields: [ministryAdminId], references: [id])
   users         User[]
@@ -162,7 +163,6 @@ model Church {
   resources     Resource[]
   transactions  Transaction[]
   subaccount    Subaccount?
-  wallet        Wallet?
   kpis          KPI[]
   teams         Team[]
   reminders     ReminderCache[]
@@ -272,31 +272,23 @@ model Transaction {
   type          String   @default("event_ticket") // event_ticket | donation | subscription
   notes         String?  @db.Text
   isManual      Boolean  @default(false) // true if created manually by admin
-  // Paystack details
-  channel       String?  // mobile_money | card | bank
+  // Gateway details
+  channel       String?  // mobile_money | card | bank | mpesa
   ipAddress     String?
   paidAt        DateTime?
   gatewayResponse String?  @db.LongText
   // Fee breakdown
-  baseAmount      Float?   // Original amount (what church gets)
-  convenienceFee  Float?   // Gateway processing fee (2% Paychangu, 2.9% Paystack)
-  systemFeeAmount Float?   // Platform system fee (17.5% Malawi, 16% Kenya of baseAmount)
-  totalAmount     Float?   // baseAmount + convenienceFee + systemFeeAmount
-  gatewayCharge   Float?   // Actual charge reported by gateway (Paychangu: charge field, Paystack: fees field)
-  systemGatewayFeeRate Float?   // Gateway fee rate used e.g. 0.02 for Malawi, 0.029 for Kenya
-  systemFeeRate   Float?   // Platform fee rate used e.g. 0.005 for both
+  baseAmount      Float?   // Original amount
+  totalAmount     Float?   // Total charged (= baseAmount, no fees)
   // Gateway routing
-  gateway         String?  // paystack | paychangu
-  gatewayCountry  String?  // Kenya | Malawi
-  // Subaccount info
-  subaccountCode String?
-  subaccountName String?
-  // Customer info (from payment gateway)
+  gateway         String?  // mpesa
+  // Customer info
   customerEmail String?
   customerPhone String?
-  authorizationCode String?
-  cardLast4     String?
-  cardBank      String?
+  // M-Pesa specific fields
+  mpesaReceiptNumber      String?  // e.g. QHX3KZLP9A
+  mpesaCheckoutRequestId  String?
+  mpesaPhoneNumber        String?
   // Guest info (typed by user on frontend)
   isGuest       Boolean  @default(false)
   guestName     String?
@@ -322,18 +314,22 @@ model Transaction {
 // ─── Pending Transactions (temporary until payment confirmed) ────────────────
 
 model PendingTransaction {
-  id        String   @id @default(cuid())
-  reference String?  @unique
-  amount    Float
-  currency  String   @default("NGN")
-  status    String   @default("pending") // pending | completed | failed | abandoned
-  userId    String?
-  churchId  String
-  eventId   String?
-  type      String   @default("event_ticket")
-  metadata  String?  @db.Text
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  id                     String   @id @default(cuid())
+  reference              String?  @unique
+  amount                 Float
+  currency               String   @default("KES")
+  status                 String   @default("pending") // pending | completed | failed | abandoned
+  userId                 String?
+  churchId               String
+  eventId                String?
+  type                   String   @default("event_ticket")
+  metadata               String?  @db.Text
+  // M-Pesa specific — set when STK push is initiated
+  mpesaCheckoutRequestId String?  @unique
+  mpesaPhoneNumber       String?
+  failureReason          String?  // Safaricom ResultDesc on failure (cancelled, timeout, wrong PIN, etc.)
+  createdAt              DateTime @default(now())
+  expiresAt              DateTime
 
   @@index([userId])
   @@index([churchId])
@@ -392,6 +388,10 @@ model DonationTransaction {
   donorEmail    String?
   donorPhone    String?
   notes         String?  @db.Text
+  // M-Pesa specific fields
+  mpesaReceiptNumber      String?
+  mpesaCheckoutRequestId  String?
+  mpesaPhoneNumber        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -578,7 +578,7 @@ model Payment {
   ministryAdminId String
   packageId       String?
   amount          Float
-  currency        String   @default("MWK")
+  currency        String   @default("KES")
   // type: subscription | upgrade | downgrade | renewal | package_subscription
   type            String   @default("subscription")
   // status: pending | completed | failed
@@ -589,31 +589,21 @@ model Payment {
   notes           String?  @db.Text
   // Transaction details
   transactionId   String?  // Link to Transaction record
-  paymentMethod   String?  // card | mobile_money | bank
-  channel         String?  // Paystack channel used
+  paymentMethod   String?  // mobile_money
   paidAt          DateTime?
   // Fee breakdown
   baseAmount      Float?   // Original package price
-  convenienceFee  Float?   // 2% convenience fee
-  systemFeeAmount Float?   // Platform system fee on convenience fee
-  totalAmount     Float?   // baseAmount + convenienceFee + systemFeeAmount
-  gatewayCharge   Float?   // Actual charge reported by gateway
-  systemGatewayFeeRate Float?  // Gateway fee rate used e.g. 0.02 Malawi, 0.029 Kenya
-  systemFeeRate   Float?   // Platform fee rate used e.g. 0.005
+  totalAmount     Float?   // Total charged (= baseAmount, no fees)
   // Gateway routing
-  gateway         String?  // paystack | paychangu
-  // Subaccount info
-  subaccountCode  String?  // Subaccount code used
-  subaccountName  String?  // Subaccount name
-  // Customer info
-  customerEmail   String?
-  customerPhone   String?
-  cardLast4       String?
-  cardBank        String?
+  gateway         String?  // mpesa
+  // M-Pesa specific fields
+  mpesaReceiptNumber      String?
+  mpesaCheckoutRequestId  String?
+  mpesaPhoneNumber        String?
   // Metadata
   billingCycle    String?  // monthly | yearly
   expiresAt       DateTime? // When this subscription expires
-  gatewayResponse String?  @db.LongText // Full Paystack response JSON
+  gatewayResponse String?  @db.LongText
   createdById     String
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -629,72 +619,90 @@ model Payment {
 }
 
 
-// ─── Wallet System (Malawi only) ──────────────────────────────────────────────
+// ─── National Admin Balance (KES, per national admin) ───────────────────────
 
-model Wallet {
+model NationalAdminBalance {
   id              String   @id @default(cuid())
-  churchId        String   @unique
-  ministryAdminId String
+  ministryAdminId String   @unique
   balance         Float    @default(0)
-  currency        String   @default("MWK")
+  currency        String   @default("KES")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  church          Church   @relation(fields: [churchId], references: [id])
-  transactions    WalletTransaction[]
-  withdrawals     Withdrawal[]
+  transactions    NationalAdminBalanceTx[]
+  withdrawals     NationalAdminWithdrawal[]
 
-  @@map("wallets")
+  @@index([ministryAdminId])
+  @@map("national_admin_balances")
 }
 
-model WalletTransaction {
+model NationalAdminBalanceTx {
   id              String   @id @default(cuid())
-  walletId        String
+  balanceId       String
+  ministryAdminId String
+  churchId        String   // which church the payment came from
   type            String   // credit | debit
   amount          Float
   balanceBefore   Float
   balanceAfter    Float
   source          String   // event_ticket | donation | withdrawal | refund
-  sourceId        String?
+  sourceId        String?  // transaction id
   description     String?
   createdAt       DateTime @default(now())
 
-  wallet          Wallet   @relation(fields: [walletId], references: [id])
+  balance         NationalAdminBalance @relation(fields: [balanceId], references: [id])
 
-  @@index([walletId])
+  @@index([balanceId])
+  @@index([ministryAdminId])
+  @@index([churchId])
   @@index([createdAt])
-  @@map("wallet_transactions")
+  @@map("national_admin_balance_txs")
 }
 
-model Withdrawal {
+model NationalAdminWithdrawal {
   id              String   @id @default(cuid())
-  walletId        String
+  balanceId       String
   ministryAdminId String
-  initiatedBy     String?  // User who initiated the withdrawal
-  amount          Float
-  fee             Float
-  netAmount       Float
-  method          String   // mobile_money | bank_transfer
+  initiatedBy     String   // userId who triggered the withdrawal
+  amount          Float    // net amount sent to recipient
+  fee             Float    @default(0) // M-Pesa charge paid by business
+  grossAmount     Float    // amount + fee deducted from balance
+  currency        String   @default("KES")
+  // B2C or B2B
+  commandID       String   // CustomerPayBillOnline | BusinessPayBill | BusinessBuyGoods | SalaryPayment | BusinessPayment | PromotionPayment
+  // B2C recipient
+  phoneNumber     String?  // for B2C
+  // B2B recipient
+  partyB          String?  // shortcode for B2B
+  accountReference String? // account ref for B2B
+  // Daraja initiator credentials (stored per withdrawal for audit)
+  initiatorName   String?  // Daraja API initiator name
+  // Status
   status          String   @default("pending") // pending | processing | completed | failed
-  mobileOperator  String?
-  mobileNumber    String?
-  bankCode        String?
-  accountName     String?
-  accountNumber   String?
-  chargeId        String?  @unique
-  gatewayResponse String?  @db.Text
-  failureReason   String?
+  // Daraja response fields
+  conversationID        String?
+  originatorConversationID String?
+  responseCode          String?
+  responseDescription   String?
+  resultCode            Int?
+  resultDesc            String?
+  transactionID         String?  // M-Pesa transaction ID on success
+  // Failure
+  failureReason   String?  @db.Text
+  // Timestamps
   processedAt     DateTime?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  wallet          Wallet   @relation(fields: [walletId], references: [id])
+  balance         NationalAdminBalance @relation(fields: [balanceId], references: [id])
 
-  @@index([walletId])
+  @@index([ministryAdminId])
+  @@index([balanceId])
   @@index([status])
   @@index([createdAt])
-  @@map("withdrawals")
+  @@map("national_admin_withdrawals")
 }
+
 
 // ─── KPIs ──────────────────────────────────────────────────────────────────────
 

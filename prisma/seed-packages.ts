@@ -29,6 +29,7 @@ const FEATURES = [
   // Event Features
   { name: 'event_ticketing', displayName: 'Event Ticketing', category: 'events', sortOrder: 16 },
   { name: 'event_attendance', displayName: 'Event Attendance Tracking', category: 'events', sortOrder: 17 },
+  { name: 'withdrawals_management', displayName: 'Withdrawals Management', category: 'finance', sortOrder: 18 },
   
   // Limits
   { name: 'max_members', displayName: 'Maximum Members', category: 'limit', sortOrder: 18 },
@@ -41,7 +42,7 @@ const PACKAGES = [
     name: 'basic',
     displayName: 'Basic',
     description: 'Essential features for small churches',
-    priceMonthly: 50,
+    priceMonthly: 1,
     priceYearly: 500,
     sortOrder: 1,
     features: [
@@ -51,6 +52,7 @@ const PACKAGES = [
       { name: 'attendance_tracking', limit: null },
       { name: 'churches_management', limit: null },
       { name: 'transactions_view', limit: null },
+      { name: 'withdrawals_management', limit: null },
       { name: 'max_members', limit: 100 },
       { name: 'max_churches', limit: 1 },
       { name: 'max_events_per_month', limit: 10 },
@@ -60,7 +62,7 @@ const PACKAGES = [
     name: 'standard',
     displayName: 'Standard',
     description: 'Advanced features for growing churches',
-    priceMonthly: 500,
+    priceMonthly: 1,
     priceYearly: 5000,
     sortOrder: 2,
     features: [
@@ -77,6 +79,7 @@ const PACKAGES = [
       { name: 'reports_analytics', limit: null },
       { name: 'event_ticketing', limit: null },
       { name: 'event_attendance', limit: null },
+      { name: 'withdrawals_management', limit: null },
       { name: 'max_members', limit: 500 },
       { name: 'max_churches', limit: 5 },
       { name: 'max_events_per_month', limit: 50 },
@@ -86,7 +89,7 @@ const PACKAGES = [
     name: 'premium',
     displayName: 'Premium',
     description: 'Complete solution for large church networks',
-    priceMonthly: 1000,
+    priceMonthly: 1,
     priceYearly: 10000,
     sortOrder: 3,
     features: [
@@ -107,6 +110,7 @@ const PACKAGES = [
       { name: 'advanced_reports', limit: null },
       { name: 'event_ticketing', limit: null },
       { name: 'event_attendance', limit: null },
+      { name: 'withdrawals_management', limit: null },
       { name: 'max_members', limit: 999999 },
       { name: 'max_churches', limit: 999 },
       { name: 'max_events_per_month', limit: 999999 },
